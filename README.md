@@ -1,14 +1,59 @@
-# DSI-transformers
-A huggingface transformers implementation of [Transformer Memory as a Differentiable Search Index](https://arxiv.org/abs/2202.06991), Yi Tay, Vinh Q. Tran, Mostafa Dehghani, Jianmo Ni, Dara Bahri, Harsh Mehta, Zhen Qin, Kai Hui, Zhe Zhao, Jai Gupta, Tal Schuster, William W. Cohen, Donald Metzler
+# Text-To-Image Retrieval
+## My Thoughts
+- To leverage the DSI generative index strategy, I treat Text-To-Image Retrieval as a two-step tasks
+  - Image Caption
+  - DSI(Indexing&Retrieval)
+- In other words, in DSI settings, there are 3 main tasks and let's see their counterparts in Text-To-Image Retrieval
+  - Indexing Strategy(can directly leverage same strategy)
+  - DocId Representation --- ImageId Representation(can directly leverage same strategy)
+  - **Doc Representation --- Image Representation(Cross Modality!)**
+- Hence, the key task is to do image representation and make it align with the text. Here I come up with two naive solutions
+  1. CodeBook: Did a simple workaround to use almost the same training structure as DSI(Training and Inference are the same)
+    - Treat Image as Visual Tokens, and use codebook directly from T5 pretrained word embeddings to find the closest visual token
+    - This is done in a no-grad manner, so the codebook is not updated during training
+    - This could be(probably should be) done better by pretraining this image captioning/tokenization task, and both image embeddings and codebook should be linear projected(project to the same space) and then caculate the distance
+      
+      Similar ideas are already used in [Language Quantized AutoEncoders: Towards Unsupervised Text-Image Alignment](https://arxiv.org/abs/2302.00902)
+      and [Linearly Mapping from Image to Text Space](https://arxiv.org/abs/2209.15162)
+      
+        
+  ---
+  2. Cross Modality Attention: Use a different multi-modal interaction method(image-grounded decoder), and it change from DSI's co-training to a two-step training
+     - Indexing: image-to-text(id)
+     - Retrieval: text-to-text(id) same as DSI
+       This is done by leverage the encoder-decoder architecture of T5, and use the vit encoder to encode the image, and use the vit encoder embedding to serve as Key-Value pairs for the T5 decoder to generate the text(id)
+     
+     Similar ideas is used in BLIP https://arxiv.org/abs/2201.12086
+     
+       Image-To-Text(Indexing) Training:
+     
+       Training:
+       - Input: Image Embedding from ViT
+       - Output: Image Id from T5
+     
+       Inference:
+       - Input: Image Embedding from ViT
+       - Output: Image Id from T5
 
-Requirements: `python=3.8` `transformers=4.17.0` `datasets=1.18.3` `wandb`
-> Note: This is not the official repository.
+## Overview
+Codebook Overview
 
-## Updates
-- Check out our new repository for DSI training: https://github.com/ArvinZhuang/DSI-QG
+![Codebook](./images/Codebook.jpeg)
 
-## Goal of this repository
-Reproduce the results of DSI Large, Naive String Docid, NQ10K. According to Table 3 in the original paper, we should have `Hits@1=0.347`,`Hits@10=0.605`
+Cross Modality Attention
+
+![Cross_Attention](./images/Image-grounded_Decoder.jpeg)
+
+## Code
+
+- Dataset: `flickr30k_data.py`
+- Training: `train_i2m.py`
+- Model: `trainer.py`
+
+
+
+
+
 
 ### Step1: Create NQ10K training (indexing) and validation datasets
 
@@ -25,14 +70,5 @@ python3 train.py
 ```
 The training can be run with a single Tesla-v100 32G GPU. We use [wandb](https://wandb.ai/site) to log the Hits scores during training:
 
-![.im](hits_plots.png)
 
 
-### Discussion
-
-As the above plots show, the current implementation is worse than what is reported in the original paper, there are many possible reasons: the ratio of training and indexing examples (we use 1:1), number of training steps, the way of constructing documents text, etc. Although, seems the scores are on par with BM25 already.
-
-If you can identify the reason or any bug, welcome to open a PR to fix it!
-
-#### Indexing or overfitting?
-The training script also logged the hit@1 scores on the training set during training, this is aimed to analyze if the model can memorize all the training data points, the authors called this 'indexing' which I believe is just letting the model overfits the training data points. It turns out the model can reach %99.99 hit@1 on the training set very quickly (quickly overfit), but the hits scores on the test set continue going up. Seems T5 large has good generalizability on this task.
