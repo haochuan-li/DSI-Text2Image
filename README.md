@@ -23,7 +23,7 @@
      - Retrieval: text-to-text(id) same as DSI
        This is done by leverage the encoder-decoder architecture of T5, and use the vit encoder to encode the image, and use the vit encoder embedding to serve as Key-Value pairs for the T5 decoder to generate the text(id)
      
-     Similar ideas is used in [BLIP](https://arxiv.org/abs/2201.12086)
+     Similar ideas are already used in [BLIP](https://arxiv.org/abs/2201.12086)
      
        Image-To-Text(Indexing) Training:
      
