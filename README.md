@@ -1,9 +1,9 @@
 # Text-To-Image Retrieval
 ## My Thoughts
-- To leverage the DSI generative index strategy, I treat Text-To-Image Retrieval as a two-step tasks
+- To leverage the DSI generative index strategy, I treat Text-To-Image Retrieval as a two-step task
   - Image Caption
   - DSI(Indexing&Retrieval)
-- In other words, in DSI settings, there are 3 main tasks and let's see their counterparts in Text-To-Image Retrieval
+- In DSI settings, there are 3 main tasks and let's see their counterparts in Text-To-Image Retrieval
   - Indexing Strategy(can directly leverage same strategy)
   - DocId Representation --- ImageId Representation(can directly leverage same strategy)
   - **Doc Representation --- Image Representation(Cross Modality!)**
@@ -18,7 +18,7 @@
       
         
   ---
-  2. Cross Modality Attention: Use a different multi-modal interaction method(image-grounded decoder), and it change from DSI's co-training to a two-step training
+  2. Cross Modality Attention: Use a different multi-modal interaction method(image-grounded decoder), and it changes from DSI's co-training to a two-step training
      - Indexing: image-to-text(id)
      - Retrieval: text-to-text(id) same as DSI
        This is done by leverage the encoder-decoder architecture of T5, and use the vit encoder to encode the image, and use the vit encoder embedding to serve as Key-Value pairs for the T5 decoder to generate the text(id)
