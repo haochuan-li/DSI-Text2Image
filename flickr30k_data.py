@@ -193,8 +193,8 @@ if __name__ == "__main__":
 
     t5_tokenizer = T5Tokenizer.from_pretrained(model_name, cache_dir='cache')
     t5_model = T5ForConditionalGeneration.from_pretrained(model_name, cache_dir='cache')
-    train_dataset = flickr30k_train('flickr30k_multi_task_train.json', '../flickr30k_images', './train_prec.pt')
-    test_dataset = flickr30k_train('flickr30k_valid.json', '../flickr30k_images', './test_prec.pt') 
+    train_dataset = flickr30k_train('flickr30k_multi_task_train.json', '../flickr30k_images', './train_prec_large.pt')
+    test_dataset = flickr30k_train('flickr30k_valid.json', '../flickr30k_images', './test_prec_large.pt') 
 
     print(train_dataset[0],test_dataset[0])
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=4, collate_fn=IndexingCollator(t5_tokenizer, padding='longest'))

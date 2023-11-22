@@ -2,12 +2,15 @@ from typing import Dict, List, Tuple, Optional, Any, Union
 from transformers.trainer import Trainer
 from torch import nn
 import torch
+from transformers import T5Tokenizer
 
 class IndexingTrainer(Trainer):
     def __init__(self, restrict_decode_vocab, mode, visual_encoder=None, **kwds):
         super().__init__(**kwds)
         self.restrict_decode_vocab = restrict_decode_vocab
         self.mode = mode
+    
+        self.tokenizer = T5Tokenizer.from_pretrained('t5-large', cache_dir='cache')
 
     def compute_loss(self, model, inputs, return_outputs=False):
         if self.mode == 'i2t':
@@ -39,10 +42,13 @@ class IndexingTrainer(Trainer):
             # greedy search
             doc_ids = model.generate(
                 inputs_embeds = inputs['input_ids'].to(model.device),
+                # encoder_outputs = inputs['input_ids'].to(model.device),
                 # inputs['input_ids'].to(self.args.device),
                 max_length=20,
                 # num_beams=3,
                 # num_return_sequences=3,
                 prefix_allowed_tokens_fn=self.restrict_decode_vocab,
                 early_stopping=True,)
+            
+        print("Decode doc id:", self.tokenizer.batch_decode(doc_ids,skip_special_tokens=True))
         return (None, doc_ids, inputs['labels'])

@@ -49,7 +49,7 @@ class QueryEvalCallback(TrainerCallback):
                 for beams, label in zip(batch_beams, labels):
                     rank_list = self.tokenizer.batch_decode(beams,
                                                             skip_special_tokens=True)  # beam search should not return repeated docids but somehow due to T5 tokenizer there some repeats.
-                    # self.logger.info("Predict List:",rank_list, "Label:",label)
+                    print("Predict List:",rank_list, "Label:",label)
                     hits = np.where(np.array(rank_list)[:10] == label)[0]
                     if len(hits) != 0:
                         hit_at_10 += 1
@@ -138,7 +138,7 @@ def main_t2i():
     eval_dataset = flickr30k_train('flickr30k_multi_task_train.json', '../flickr30k_images', './train_prec_large.pt') 
     
     # This is the actual eval set.
-    test_dataset = flickr30k_train('flickr30k_valid.json', '../flickr30k_images', './test_prec.pt') 
+    test_dataset = flickr30k_train('flickr30k_valid.json', '../flickr30k_images', './test_prec_large.pt') 
 
     ################################################################
     # docid generation constrain, we only generate integer docids.
@@ -171,7 +171,7 @@ def main_t2i():
         per_device_eval_batch_size=128,
         evaluation_strategy='steps',
         eval_steps=1000,
-        #eval_steps=10,
+        # eval_steps=10,
         max_steps=1000000,
         dataloader_drop_last=False,  # necessary
         report_to='wandb',
