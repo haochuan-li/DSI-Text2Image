@@ -1,4 +1,3 @@
-# from data import IndexingTrainDataset, IndexingCollator, QueryEvalCollator
 from flickr30k_data import flickr30k_train, IndexingCollator, QueryEvalCollator, flickr30k_i2t_train, ImageIndexingCollator, ImageQueryEvalCollator
 from transformers import T5Tokenizer, T5ForConditionalGeneration, PrinterCallback,TrainingArguments, TrainerCallback, AutoImageProcessor, ViTModel
 from trainer import IndexingTrainer
@@ -8,9 +7,7 @@ import wandb
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from logging import Logger
-
-logger = Logger("DSI-transformers/train_i2m.py")
+import clip
 
 # Evaluation callback for the dev set.
 class QueryEvalCallback(TrainerCallback):
@@ -32,7 +29,7 @@ class QueryEvalCallback(TrainerCallback):
             num_workers=self.args.dataloader_num_workers,
         )
 
-    def on_step_end(self, args, state, control, **kwargs):
+    def on_epoch_end(self, args, state, control, **kwargs):
         hit_at_1 = 0
         hit_at_10 = 0
         model = kwargs['model'].eval()
@@ -41,22 +38,24 @@ class QueryEvalCallback(TrainerCallback):
             inputs, labels = batch
             with torch.no_grad():
                 batch_beams = model.generate(
-                    inputs['input_ids'].to(model.device),
+                    inputs_embeds = inputs['input_ids'].to(model.device),
+                    # encoder_outputs = inputs['input_ids'].to(model.device),
                     max_length=20,
                     num_beams=10,
                     prefix_allowed_tokens_fn=self.restrict_decode_vocab,
                     num_return_sequences=10,
-                    early_stopping=True, ).reshape(inputs['input_ids'].shape[0], 10, -1)
+                    early_stopping=True, 
+                    ).reshape(inputs['input_ids'].shape[0], 10, -1)
                 for beams, label in zip(batch_beams, labels):
                     rank_list = self.tokenizer.batch_decode(beams,
                                                             skip_special_tokens=True)  # beam search should not return repeated docids but somehow due to T5 tokenizer there some repeats.
-                    self.logger.info("Predict List:",rank_list, "Label:",label)
+                    # self.logger.info("Predict List:",rank_list, "Label:",label)
                     hits = np.where(np.array(rank_list)[:10] == label)[0]
                     if len(hits) != 0:
                         hit_at_10 += 1
                         if hits[0] == 0:
                             hit_at_1 += 1
-        self.logger.info({"Hits@1": hit_at_1 / len(self.test_dataset), "Hits@10": hit_at_10 / len(self.test_dataset)})
+        self.logger.log({"Hits@1": hit_at_1 / len(self.test_dataset), "Hits@10": hit_at_10 / len(self.test_dataset)})
         
 class ImageQueryEvalCallback(TrainerCallback):
     def __init__(self, test_dataset, logger, restrict_decode_vocab, args: TrainingArguments, tokenizer: T5Tokenizer, visual_encoder: ViTModel):
@@ -123,23 +122,23 @@ def compute_metrics(eval_preds):
 
 def main_t2i():
     print("Running text2image Retrieval...")
-    model_name = "t5-base"
-
-    image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224-in21k")
-    vit = ViTModel.from_pretrained("google/vit-base-patch16-224-in21k")
+    
+    key = 'cab22b56672abca555605b07536a36a2c5c4ef39'
+    wandb.login(key=key)
+    wandb.login()
+    wandb.init(project="DSI", name='NQ-10k-t5-large_i2t')
+    
+    model_name = "t5-large"
     
     t5_tokenizer = T5Tokenizer.from_pretrained(model_name, cache_dir='cache')
     t5_model = T5ForConditionalGeneration.from_pretrained(model_name, cache_dir='cache')
+
     
-    codebook = t5_model.get_input_embeddings().weight
-    codebook.requires_grad_(False)
-    codebook_norm = F.normalize(codebook)
-    
-    train_dataset = flickr30k_train('flickr30k_multi_task_train.json', '../flickr30k_images',image_processor,vit,t5_tokenizer,codebook_norm)
-    eval_dataset = flickr30k_train('flickr30k_multi_task_train.json', '../flickr30k_images',image_processor,vit, t5_tokenizer,codebook_norm) 
+    train_dataset = flickr30k_train('flickr30k_multi_task_train.json', '../flickr30k_images', './train_prec_large.pt')
+    eval_dataset = flickr30k_train('flickr30k_multi_task_train.json', '../flickr30k_images', './train_prec_large.pt') 
     
     # This is the actual eval set.
-    test_dataset = flickr30k_train('flickr30k_valid.json', '../flickr30k_images',image_processor,vit, t5_tokenizer,codebook_norm) 
+    test_dataset = flickr30k_train('flickr30k_valid.json', '../flickr30k_images', './test_prec.pt') 
 
     ################################################################
     # docid generation constrain, we only generate integer docids.
@@ -168,17 +167,18 @@ def main_t2i():
         learning_rate=0.0005,
         warmup_steps=10000,
         # weight_decay=0.01,
-        per_device_train_batch_size=16,
-        per_device_eval_batch_size=16,
+        per_device_train_batch_size=128,
+        per_device_eval_batch_size=128,
         evaluation_strategy='steps',
-        eval_steps=1,
+        eval_steps=1000,
+        #eval_steps=10,
         max_steps=1000000,
         dataloader_drop_last=False,  # necessary
         report_to='wandb',
-        logging_steps=1,
+        logging_steps=50,
         save_strategy='no',
         # fp16=True,  # gives 0/nan loss at some point during training, seems this is a transformers bug.
-        dataloader_num_workers=0,
+        dataloader_num_workers=10,
         # gradient_accumulation_steps=2
     )
 
@@ -193,7 +193,7 @@ def main_t2i():
             padding='longest',
         ),
         compute_metrics=compute_metrics,
-        callbacks=[QueryEvalCallback(test_dataset, logger, restrict_decode_vocab, training_args, t5_tokenizer)],
+        callbacks=[QueryEvalCallback(test_dataset, wandb, restrict_decode_vocab, training_args, t5_tokenizer)],
         restrict_decode_vocab=restrict_decode_vocab,
         mode='t2i',
     )
@@ -271,7 +271,6 @@ def main_i2t():
         callbacks=[ImageQueryEvalCallback(test_dataset, wandb, restrict_decode_vocab, training_args, t5_tokenizer,vit)],
         restrict_decode_vocab=restrict_decode_vocab,
         mode='i2t',
-        visual_encoder = vit 
     )
     
     trainer.train()

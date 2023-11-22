@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 import datasets
 import torch
+import clip
 import torch.nn.functional as F
 from torchvision import transforms
 from transformers import TrainingArguments, TrainerCallback, ViTModel,PreTrainedTokenizer, DataCollatorWithPadding
@@ -31,37 +32,17 @@ def pre_caption(caption):
 
 
 class flickr30k_train(Dataset):
-    """ Did a simple workaround to use almost the same training structure as DSI
-    - Treat Image as Visual Tokens, and use codebook directly from T5 pretrained word embeddings to find the closest visual token
-    - This is done in a no-grad manner, so the codebook is not updated during training
-    - This could be(probably should be) done better by pretraining this image captioning/tokenization task, 
-      and both image embeddings and codebook should be linear projected and then caculate the distance
-      Similar ideas are used in https://link.zhihu.com/?target=https%3A//openreview.net/forum%3Fid%3DLt8bMlhiwx2
-      and https://link.zhihu.com/?target=https%3A//arxiv.org/abs/2209.15162
-      
-      Training and Inference are the same as DSI
-
-    Args:
-        Dataset (_type_): _description_
-    """
-    def __init__(self, filename, ann_root , image_processor, visual_encoder, tokenizer, codebook, max_words=32, prompt='question: '):        
+    def __init__(self, filename, ann_root , prec_file=None):        
         self.annotation = datasets.load_dataset(
             'json',
             data_files=os.path.join(ann_root,filename),
             ignore_verifications=False,
         )['train']
         
-        self.transform = transforms.Compose([                        
-                    transforms.RandomResizedCrop(224,scale=(0.5, 1.0),interpolation=InterpolationMode.BICUBIC),
-                ])
-        self.image_processor = image_processor
-        self.codebook = codebook
+        self.data = torch.load(prec_file, map_location='cpu')
+        # print("Loading Precomputed Clip Embed:", self.data.shape)
         
-        self.image_root = ann_root
-        self.max_words = max_words      
-        self.prompt = prompt
-        self.tokenizer = tokenizer
-        self.visual_encoder = visual_encoder
+        assert len(self.data) == len(self.annotation)
         
         self.img_ids = {}  
         n = 0
@@ -74,39 +55,11 @@ class flickr30k_train(Dataset):
     def __len__(self):
         return len(self.annotation)
     
-    def get_visual_token(self, img_emb, max_length=32):
-        z_flattened = F.normalize(img_emb).view(-1, 768) # vit-base hidden dim is 768
-        # ecuclidean distance between z_flattened and codebook
-        d = torch.sum(z_flattened**2, dim=1, keepdim=True) + \
-            torch.sum(self.codebook**2, dim=1) - \
-            2*(torch.matmul(z_flattened, self.codebook.t()))
-
-        min_encoding_indices = torch.argmin(d, dim=1)
-        # for memory efficiency, randomly sample from the min_encoding_indices
-        # can be done better by bottom-up attention
-        rand_inds = torch.randint(len(min_encoding_indices), (max_length,))
-        out = min_encoding_indices[rand_inds]
-        out[-1] = self.tokenizer.eos_token_id 
-        return out
-    
     def __getitem__(self, index):    
         ann = self.annotation[index]
-        if ann.get('image',None):
-            image_path = os.path.join(self.image_root,ann['image'])        
-            image = Image.open(image_path).convert('RGB')   
-            image = self.image_processor(self.transform(image), return_tensors='pt')
-            with torch.no_grad():
-                image_emb = self.visual_encoder(**image)
-            
-            input_ids = self.get_visual_token(image_emb.last_hidden_state)
-            # print("image input_ids:", input_ids.shape)
-        else:
-            caption = self.prompt+pre_caption(ann['caption']) 
-            input_ids = self.tokenizer(caption,
-                                   return_tensors="pt",
-                                   truncation='only_first',
-                                   max_length=self.max_words).input_ids[0]
-            # print("caption input_ids:", input_ids.shape)
+        input_ids = self.data[index]
+        
+        # print("Input Ids:", input_ids.shape)
         return input_ids, str(self.img_ids[ann['image_id']]) 
 
 
@@ -189,10 +142,15 @@ class IndexingCollator(DataCollatorWithPadding):
     def __call__(self, features):
         # doc + query = features
         # features = [(input_ids, docid), (input_ids, docid), ...]
-        input_ids = [{'input_ids': x[0]} for x in features]
+        # input_ids = [{'input_ids': x[0]} for x in features]
+        inputs = {}
         docids = [x[1] for x in features]
-        inputs = super().__call__(input_ids)
+        # inputs = super().__call__(input_ids)
+        input_ids = torch.stack([x[0] for x in features], dim=0)
+        input_ids /= input_ids.norm(dim=-1, keepdim=True)
         
+        # print("Same as norm:", input_ids == input_ids_norm)
+        # print("collate input ids:", input_ids.shape)
         # treat docids as sequence of tokens --- naive structured string identifier
         labels = self.tokenizer(
             docids, padding="longest", return_tensors="pt"
@@ -201,6 +159,7 @@ class IndexingCollator(DataCollatorWithPadding):
         # replace padding token id's of the labels by -100 according to https://huggingface.co/docs/transformers/model_doc/t5#training
         labels[labels == self.tokenizer.pad_token_id] = -100
         inputs['labels'] = labels
+        inputs['input_ids'] = input_ids.unsqueeze(1)
         return inputs
 
 @dataclass
@@ -216,49 +175,32 @@ class ImageQueryEvalCollator(DataCollatorWithPadding):
 @dataclass
 class QueryEvalCollator(DataCollatorWithPadding):
     def __call__(self, features):
-        input_ids = [{'input_ids': x[0]} for x in features]
+        # input_ids = [{'input_ids': x[0]} for x in features]
+        inputs = {}
+        input_ids = torch.stack([x[0] for x in features], dim=0)
+        input_ids /= input_ids.norm(dim=-1, keepdim=True)
+        # print("Same as norm:", input_ids == input_ids_norm)
         labels = [x[1] for x in features]
-        inputs = super().__call__(input_ids)
+        inputs['input_ids'] = input_ids.unsqueeze(1)
 
         return inputs, labels
 
     
 if __name__ == "__main__":
-    from transformers import T5Tokenizer, T5ForConditionalGeneration, TrainingArguments, TrainerCallback,AutoImageProcessor, ViTModel
-    from torch.utils.data import DataLoader
+    from transformers import T5Tokenizer, T5ForConditionalGeneration
 
-    image_processor = AutoImageProcessor.from_pretrained("google/vit-large-patch16-224-in21k")
-    # vit = ViTModel.from_pretrained("google/vit-large-patch16-224-in21k")
-    
     model_name = "t5-large"
-    L = 32  # only use the first 32 tokens of documents (including title)
+
     t5_tokenizer = T5Tokenizer.from_pretrained(model_name, cache_dir='cache')
-    # t5_model = T5ForConditionalGeneration.from_pretrained(model_name, cache_dir='cache')
-    
-    # codebook = t5_model.get_input_embeddings().weight
-    # codebook.requires_grad_(False)
-    # codebook_norm = F.normalize(codebook)
-    
-    train_dataset = flickr30k_i2t_train('flickr30k_i2t_train.json', '../flickr30k_images',image_processor)
-    print(train_dataset[0])
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=4, collate_fn=ImageIndexingCollator(t5_tokenizer, padding='longest'))
+    t5_model = T5ForConditionalGeneration.from_pretrained(model_name, cache_dir='cache')
+    train_dataset = flickr30k_train('flickr30k_multi_task_train.json', '../flickr30k_images', './train_prec.pt')
+    test_dataset = flickr30k_train('flickr30k_valid.json', '../flickr30k_images', './test_prec.pt') 
+
+    print(train_dataset[0],test_dataset[0])
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=4, collate_fn=IndexingCollator(t5_tokenizer, padding='longest'))
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=4, collate_fn=QueryEvalCollator(t5_tokenizer, padding='longest'))
     i = next(iter(train_loader))
-    print("Train Batch:",i, i['images'].shape, i['labels'].shape)
-    # train_dataset = flickr30k_train('flickr30k_multi_task_train.json', '../flickr30k_images',image_processor,vit,t5_tokenizer,codebook_norm)
-    # val_dataset = flickr30k_train('flickr30k_valid.json', '../flickr30k_images',image_processor,vit, t5_tokenizer,codebook_norm) 
-    # # test_dataset = flickr30k_retrieval_eval(transform_train, '../flickr30k_images/', '../flickr30k_images', 'test')          
-    # train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=4, collate_fn=IndexingCollator(t5_tokenizer, padding='longest'))
-    # i = next(iter(train_loader))
-    # print("Train Batch:",i)
-    # val_loader = torch.utils.data.DataLoader(train_dataset, batch_size=4, collate_fn=QueryEvalCollator(t5_tokenizer, padding='longest'))
-    # y = next(iter(val_loader))
-    # # print(len(i), i['input_ids'].dim(), i['images'].shape, i['labels'].shape, i['task_type'].shape, i['task_type'])
-    # print("Eval Batch:",y)
+    j = next(iter(test_loader))
+    print("Train Batch:",i['input_ids'].shape, i['labels'].shape)
+    print("Test Batch:",i['input_ids'].shape, i['labels'].shape)
     
-    # image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224-in21k")
-    # model = ViTModel.from_pretrained("google/vit-large-patch16-224-in21k")
-    # print(model(train_dataset[0][0].unsqueeze(0)).last_hidden_state.shape)
-    
-    # tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', cache_dir='cache')
-    # id_token = tokenizer(str(train_dataset[0][2]), padding="longest", return_tensors="pt").input_ids
-    # print(id_token)
