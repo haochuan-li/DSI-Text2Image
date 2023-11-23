@@ -2,7 +2,6 @@ from typing import Dict, List, Tuple, Optional, Any, Union
 from transformers.trainer import Trainer
 from torch import nn
 import torch
-from transformers import T5Tokenizer
 
 class IndexingTrainer(Trainer):
     def __init__(self, restrict_decode_vocab, mode, visual_encoder=None, **kwds):
@@ -10,7 +9,6 @@ class IndexingTrainer(Trainer):
         self.restrict_decode_vocab = restrict_decode_vocab
         self.mode = mode
     
-        self.tokenizer = T5Tokenizer.from_pretrained('t5-large', cache_dir='cache')
 
     def compute_loss(self, model, inputs, return_outputs=False):
         if self.mode == 'i2t':
@@ -23,8 +21,8 @@ class IndexingTrainer(Trainer):
         elif self.mode == 't2i':
             # print("Clip Encoder Outputs:", inputs['input_ids'].device)
             # loss = model(input_ids=inputs['input_ids'], attention_mask=inputs['attention_mask'], labels=inputs['labels']).loss
-            # loss = model(inputs_embeds=inputs['input_ids'], labels=inputs['labels']).loss
-            loss = model(encoder_outputs=(inputs['input_ids'],), labels=inputs['labels']).loss
+            loss = model(inputs_embeds=inputs['input_ids'], labels=inputs['labels']).loss
+            # loss = model(encoder_outputs=(inputs['input_ids'],), labels=inputs['labels']).loss
         if return_outputs:
             return loss, [None, None]  # fake outputs
         return loss
@@ -42,7 +40,7 @@ class IndexingTrainer(Trainer):
             # greedy search
             doc_ids = model.generate(
                 inputs_embeds = inputs['input_ids'].to(model.device),
-                # encoder_outputs = inputs['input_ids'].to(model.device),
+                # encoder_outputs = (inputs['input_ids'].to(model.device),),
                 # inputs['input_ids'].to(self.args.device),
                 max_length=20,
                 # num_beams=3,
@@ -50,5 +48,4 @@ class IndexingTrainer(Trainer):
                 prefix_allowed_tokens_fn=self.restrict_decode_vocab,
                 early_stopping=True,)
             
-        print("Decode doc id:", self.tokenizer.batch_decode(doc_ids,skip_special_tokens=True))
         return (None, doc_ids, inputs['labels'])

@@ -5,7 +5,6 @@ from dataclasses import dataclass
 
 import datasets
 import torch
-import clip
 import torch.nn.functional as F
 from torchvision import transforms
 from transformers import TrainingArguments, TrainerCallback, ViTModel,PreTrainedTokenizer, DataCollatorWithPadding
@@ -44,23 +43,15 @@ class flickr30k_train(Dataset):
         
         assert len(self.data) == len(self.annotation)
         
-        self.img_ids = {}  
-        n = 0
-        for ann in self.annotation:
-            img_id = ann['image_id']
-            if img_id not in self.img_ids.keys():
-                self.img_ids[img_id] = n
-                n += 1    
-        
     def __len__(self):
         return len(self.annotation)
     
     def __getitem__(self, index):    
         ann = self.annotation[index]
         input_ids = self.data[index]
-        
+        # print(ann['image_id'])
         # print("Input Ids:", input_ids.shape)
-        return input_ids, str(self.img_ids[ann['image_id']]) 
+        return input_ids, str(ann['image_id']) 
 
 
 class flickr30k_i2t_train(Dataset):
@@ -116,6 +107,7 @@ class flickr30k_i2t_train(Dataset):
         image = Image.open(image_path).convert('RGB')   
         image = self.image_processor(self.transform(image), return_tensors='pt').pixel_values
         # print("image input_ids:", image.shape)
+        
 
         return image, str(self.img_ids[ann['image_id']]) 
 
@@ -196,11 +188,12 @@ if __name__ == "__main__":
     train_dataset = flickr30k_train('flickr30k_multi_task_train.json', '../flickr30k_images', './train_prec_large.pt')
     test_dataset = flickr30k_train('flickr30k_valid.json', '../flickr30k_images', './test_prec_large.pt') 
 
-    print(train_dataset[0],test_dataset[0])
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=4, collate_fn=IndexingCollator(t5_tokenizer, padding='longest'))
+    print(train_dataset[1],test_dataset[1])
+    # print(test_dataset[1])
+    # train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=4, collate_fn=IndexingCollator(t5_tokenizer, padding='longest'))
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=4, collate_fn=QueryEvalCollator(t5_tokenizer, padding='longest'))
-    i = next(iter(train_loader))
+    # i = next(iter(train_loader))
     j = next(iter(test_loader))
-    print("Train Batch:",i['input_ids'].shape, i['labels'].shape)
-    print("Test Batch:",i['input_ids'].shape, i['labels'].shape)
+    # print("Train Batch:",i['input_ids'].shape, i['labels'].shape)
+    print("Test Batch:",j[0]['input_ids'].shape, j[1])
     

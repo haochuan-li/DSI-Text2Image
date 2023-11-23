@@ -7,7 +7,6 @@ import wandb
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-import clip
 
 # Evaluation callback for the dev set.
 class QueryEvalCallback(TrainerCallback):
@@ -39,7 +38,7 @@ class QueryEvalCallback(TrainerCallback):
             with torch.no_grad():
                 batch_beams = model.generate(
                     inputs_embeds = inputs['input_ids'].to(model.device),
-                    # encoder_outputs = inputs['input_ids'].to(model.device),
+                    # encoder_outputs = (inputs['input_ids'].to(model.device),),
                     max_length=20,
                     num_beams=10,
                     prefix_allowed_tokens_fn=self.restrict_decode_vocab,
