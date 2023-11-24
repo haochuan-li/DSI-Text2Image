@@ -7,6 +7,7 @@ import wandb
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+import argparse
 
 # Evaluation callback for the dev set.
 class QueryEvalCallback(TrainerCallback):
@@ -119,7 +120,7 @@ def compute_metrics(eval_preds):
     return {'accuracy': num_correct / num_predict}
 
 
-def main_t2i():
+def main_t2i(args):
     print("Running text2image Retrieval...")
     
     key = 'cab22b56672abca555605b07536a36a2c5c4ef39'
@@ -163,9 +164,9 @@ def main_t2i():
     # key is in Collator, concurrenctly training with doc -> docid and query -> docid
     training_args = TrainingArguments(
         output_dir="./results",
-        learning_rate=0.0005,
-        warmup_steps=10000,
-        # weight_decay=0.01,
+        learning_rate=args.lr,
+        warmup_steps=args.ws,
+        weight_decay=args.wd,
         per_device_train_batch_size=128,
         per_device_eval_batch_size=128,
         evaluation_strategy='steps',
@@ -239,8 +240,8 @@ def main_i2t():
     # key is in Collator, concurrenctly training with doc -> docid and query -> docid
     training_args = TrainingArguments(
         output_dir="./results",
-        learning_rate=0.0005,
-        warmup_steps=10000,
+        learning_rate=0.005,
+        warmup_steps=20000,
         # weight_decay=0.01,
         per_device_train_batch_size=16,
         per_device_eval_batch_size=16,
@@ -362,6 +363,11 @@ def test_inference():
     
 
 if __name__ == "__main__":
-    main_t2i()
+    parser = argparse.ArgumentParser(description='Parameter Processing')
+    parser.add_argument("--lr", type=float, default=0.0005, help="learning rate")
+    parser.add_argument("--ws", type=int, default=10000, help="warming steps")
+    parser.add_argument("--wd", type=float, default=0.0, help="weight decay")
+    args = parser.parse_args()
+    main_t2i(args)
     # main_i2t()
     # test_inference()

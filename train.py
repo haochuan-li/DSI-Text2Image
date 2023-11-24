@@ -6,7 +6,7 @@ import torch
 import wandb
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-
+from peft import LoraConfig, get_peft_model, prepare_model_for_int8_training, TaskType
 
 class QueryEvalCallback(TrainerCallback):
     def __init__(self, test_dataset, logger, restrict_decode_vocab, args: TrainingArguments, tokenizer: T5Tokenizer):
@@ -35,7 +35,7 @@ class QueryEvalCallback(TrainerCallback):
             inputs, labels = batch
             with torch.no_grad():
                 batch_beams = model.generate(
-                    inputs['input_ids'].to(model.device),
+                    input_ids=inputs['input_ids'].to(model.device),
                     max_length=20,
                     num_beams=10,
                     prefix_allowed_tokens_fn=self.restrict_decode_vocab,
@@ -44,6 +44,7 @@ class QueryEvalCallback(TrainerCallback):
                 for beams, label in zip(batch_beams, labels):
                     rank_list = self.tokenizer.batch_decode(beams,
                                                             skip_special_tokens=True)  # beam search should not return repeated docids but somehow due to T5 tokenizer there some repeats.
+                    print("Rank List:",rank_list,"Label:",label)
                     hits = np.where(np.array(rank_list)[:10] == label)[0]
                     if len(hits) != 0:
                         hit_at_10 += 1
@@ -68,9 +69,12 @@ def compute_metrics(eval_preds):
 
 def main():
     model_name = "t5-large"
+    # model_name = "google/flan-t5-large"
     L = 32  # only use the first 32 tokens of documents (including title)
 
     # We use wandb to log Hits scores after each epoch. Note, this script does not save model checkpoints.
+    key = 'cab22b56672abca555605b07536a36a2c5c4ef39'
+    wandb.login(key=key)
     wandb.login()
     wandb.init(project="DSI", name='NQ-10k-t5-large')
 
@@ -121,6 +125,105 @@ def main():
         per_device_eval_batch_size=128,
         evaluation_strategy='steps',
         eval_steps=1000,
+        #eval_steps=10,
+        max_steps=1000000,
+        dataloader_drop_last=False,  # necessary
+        report_to='wandb',
+        logging_steps=50,
+        save_strategy='no',
+        # fp16=True,  # gives 0/nan loss at some point during training, seems this is a transformers bug.
+        dataloader_num_workers=10,
+        # gradient_accumulation_steps=2
+    )
+
+    trainer = IndexingTrainer(
+        model=model,
+        tokenizer=tokenizer,
+        args=training_args,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        data_collator=IndexingCollator(
+            tokenizer,
+            padding='longest',
+        ),
+        compute_metrics=compute_metrics,
+        callbacks=[QueryEvalCallback(test_dataset, wandb, restrict_decode_vocab, training_args, tokenizer)],
+        restrict_decode_vocab=restrict_decode_vocab
+    )
+    trainer.train(
+    )
+
+def main_peft():
+    model_name = "t5-large"
+    # model_name = "google/flan-t5-large"
+    L = 32  # only use the first 32 tokens of documents (including title)
+
+    # We use wandb to log Hits scores after each epoch. Note, this script does not save model checkpoints.
+    key = 'cab22b56672abca555605b07536a36a2c5c4ef39'
+    wandb.login(key=key)
+    wandb.login()
+    wandb.init(project="DSI", name='NQ-10k-t5-large-lora')
+
+    tokenizer = T5Tokenizer.from_pretrained(model_name, cache_dir='cache')
+    model = T5ForConditionalGeneration.from_pretrained(model_name, cache_dir='cache')
+
+    """PEFT Model"""
+    lora_config = LoraConfig(
+                            r=16,
+                            lora_alpha=32,
+                            target_modules=["q", "v"],
+                            lora_dropout=0.05,
+                            bias="none",
+                            task_type=TaskType.SEQ_2_SEQ_LM
+                    )
+    model = get_peft_model(model, lora_config)
+    model.print_trainable_parameters()
+
+    train_dataset = IndexingTrainDataset(path_to_data='data/NQ/NQ_10k_multi_task_train.json',
+                                         max_length=L,
+                                         cache_dir='cache',
+                                         tokenizer=tokenizer)
+    
+    # This eval set is really not the 'eval' set but used to report if the model can memorise (index) all training data points.
+    eval_dataset = IndexingTrainDataset(path_to_data='data/NQ/NQ_10k_multi_task_train.json',
+                                        max_length=L,
+                                        cache_dir='cache',
+                                        tokenizer=tokenizer)
+    
+    # This is the actual eval set.
+    test_dataset = IndexingTrainDataset(path_to_data='data/NQ/NQ_10k_valid.json',
+                                        max_length=L,
+                                        cache_dir='cache',
+                                        tokenizer=tokenizer)
+
+    ################################################################
+    # docid generation constrain, we only generate integer docids.
+    SPIECE_UNDERLINE = "▁"
+    INT_TOKEN_IDS = []
+    for token, id in tokenizer.get_vocab().items():
+        if token[0] == SPIECE_UNDERLINE:
+            if token[1:].isdigit():
+                INT_TOKEN_IDS.append(id)
+        if token == SPIECE_UNDERLINE:
+            INT_TOKEN_IDS.append(id)
+        elif token.isdigit():
+            INT_TOKEN_IDS.append(id)
+    INT_TOKEN_IDS.append(tokenizer.eos_token_id)
+
+    def restrict_decode_vocab(batch_idx, prefix_beam):
+        return INT_TOKEN_IDS
+    ################################################################
+
+    training_args = TrainingArguments(
+        output_dir="./results",
+        learning_rate=0.0005,
+        warmup_steps=10000,
+        # weight_decay=0.01,
+        per_device_train_batch_size=128,
+        per_device_eval_batch_size=128,
+        evaluation_strategy='steps',
+        eval_steps=1000,
+        # eval_steps=10,
         max_steps=1000000,
         dataloader_drop_last=False,  # necessary
         report_to='wandb',
@@ -150,4 +253,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+    main_peft()
